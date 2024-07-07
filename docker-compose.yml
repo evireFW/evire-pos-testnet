@@ -1,134 +1,84 @@
-version: "3.9"
+version: '3.8'
+
+networks:
+  evire-network:
+    name: evire-network
+
 services:
-  # Creates a genesis state for the beacon chain using a YAML configuration file and
-  # a deterministic set of 64 validators.
-  create-beacon-chain-genesis:
-    image: "gcr.io/prysmaticlabs/prysm/cmd/prysmctl"
+  geth:
+    image: ethereum/client-go:latest
+    container_name: evire-geth-node
+    ports:
+      - "30303:30303/tcp"
+      - "30303:30303/udp"
+      - "8545:8545"
+    volumes:
+      - ./geth-data:/geth-data
+      - ./genesis.json:/genesis.json
+      - ./jwt.hex:/jwt.hex
     command:
-      - testnet
-      - generate-genesis
-      - --fork=capella
-      - --num-validators=64
-      - --genesis-time-delay=2
-      - --output-ssz=/consensus/genesis.ssz
-      - --chain-config-file=/consensus/config.yml
-      - --geth-genesis-json-in=/execution/genesis.json
-      - --geth-genesis-json-out=/execution/genesis.json
-    volumes:
-      - ./consensus:/consensus
-      - ./execution:/execution
+      - --datadir=/geth-data
+      - --networkid=787878
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=8545
+      - --http.api=eth,net,web3,engine
+      - --http.corsdomain=*
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.port=8551
+      - --authrpc.vhosts=*
+      - --authrpc.jwtsecret=/jwt.hex
+      - --syncmode=full
+      - --nat=extip:37.27.118.184
+      - --bootnodes=enode://ecb78178a209f0f41f26dbc79b53630678bc98fe16b9fac1161a76852f8c90836974ee5f4eebfe676caf802a19385aeef2f22f221c13952b8da503bc59df1b71@37.27.118.184:30303
+    restart: unless-stopped
+    networks:
+      - evire-network
 
-  # Removes the database of the go-ethereum execution client to ensure we start from a clean state.
-  # (geth has a `removedb` option, but it asks for a keyboard confirmation, so we use this instead)
-  geth-remove-db:
-    image: "alpine:3.19.0"
-    command: rm -rf /execution/geth
-    volumes:
-      - ./execution:/execution
-
-  # Sets up the genesis configuration for the go-ethereum client from a JSON file.
-  geth-genesis:
-    image: "ethereum/client-go:latest"
-    command: --datadir=/execution init /execution/genesis.json
-    volumes:
-      - ./execution:/execution
-      - ./execution/genesis.json:/execution/genesis.json
-    depends_on:
-      create-beacon-chain-genesis:
-        condition: service_completed_successfully
-      geth-remove-db:
-        condition: service_completed_successfully
-
-  # Runs a Prysm beacon chain from a specified genesis state created in the previous step
-  # and connects to go-ethereum in the same network as the execution client.
-  # The account used in go-ethereum is set as the suggested fee recipient for transactions
-  # proposed via the validators attached to the beacon node.
   beacon-chain:
-    image: "gcr.io/prysmaticlabs/prysm/beacon-chain:v4.1.1"
+    image: gcr.io/prysmaticlabs/prysm/beacon-chain:latest
+    container_name: evire-prysm-beacon-chain
+    ports:
+      - "4000:4000"
+      - "13000:13000"
+    volumes:
+      - ./prysm-data:/prysm-data
+      - ./jwt.hex:/jwt.hex
+      - ./config.yml:/config.yml
+      - ./genesis.ssz:/genesis.ssz
     command:
-      - --datadir=/consensus/beacondata
-      # No peers to sync with in this testnet, so setting to 0
-      - --min-sync-peers=0
-      - --genesis-state=/consensus/genesis.ssz
-      - --bootstrap-node=
-      - --interop-eth1data-votes
-      # The chain configuration file used for setting up Prysm
-      - --chain-config-file=/consensus/config.yml
-      # We specify the chain id used by our execution client
-      - --contract-deployment-block=0
-      - --chain-id=${CHAIN_ID:-787878}
+      - --datadir=/prysm-data
       - --rpc-host=0.0.0.0
       - --grpc-gateway-host=0.0.0.0
+      - --monitoring-host=0.0.0.0
       - --execution-endpoint=http://geth:8551
       - --accept-terms-of-use
-      - --jwt-secret=/execution/jwtsecret
-      - --suggested-fee-recipient=0x123463a4b065722e99115d6c222f267d9cabb524
-      - --minimum-peers-per-subnet=0
-      - --enable-debug-rpc-endpoints
-      - --force-clear-db
+      - --jwt-secret=/jwt.hex
+      - --genesis-state=/genesis.ssz
+      - --chain-config-file=/config.yml
+      - --bootstrap-node=enr:-Ku4QGQJf2bcDAwVGvbvtq3AB4KKwAvStTenY-i_QnW2ABNRRBncIU_5qR_e_um-9t3s9g-Y5ZfFATj1nhtzq6lvgc4Bg2V0aMvKhARa_qKEZrOm64JpZIJ2NIJpcIR_AAABiXNlY3AyNTZrMaED7LeBeKIJ8PQfJtvHm1NjBni8mP4WufrBFhp2hS-MkIOEc25hcMCDdGNwgnZfg3VkcIJ2Xw
+      - --suggested-fee-recipient=0x0000000000000000000000000000000000000000
     depends_on:
-      create-beacon-chain-genesis:
-        condition: service_completed_successfully
-    ports:
-      - 4000:4000
-      - 3500:3500
-      - 8080:8080
-      - 6060:6060
-      - 9090:9090
-    volumes:
-      - ./consensus:/consensus
-      - ./execution:/execution
-      - ./execution/jwtsecret:/execution/jwtsecret
+      - geth
+    restart: unless-stopped
+    networks:
+      - evire-network
 
-  # Runs the go-ethereum execution client with the specified, unlocked account and necessary
-  # APIs to allow for proof-of-stake consensus via Prysm.
-  geth:
-    image: "ethereum/client-go:latest"
-    command:
-      - --http
-      - --http.api=eth,net,web3
-      - --http.addr=0.0.0.0
-      - --http.corsdomain=*
-      - --ws
-      - --ws.api=eth,net,web3
-      - --ws.addr=0.0.0.0
-      - --ws.origins=*
-      - --authrpc.vhosts=*
-      - --authrpc.addr=0.0.0.0
-      - --authrpc.jwtsecret=/execution/jwtsecret
-      - --datadir=/execution
-      - --allow-insecure-unlock
-      - --unlock=0x123463a4b065722e99115d6c222f267d9cabb524
-      - --password=/execution/geth_password.txt
-      - --syncmode=full
-    ports:
-      - 8551:8551
-      - 8545:8545
-      - 8546:8546
-    depends_on:
-      geth-genesis:
-        condition: service_completed_successfully
-      beacon-chain:
-        condition: service_started
-    volumes:
-      - ./execution:/execution
-      - ./execution/jwtsecret:/execution/jwtsecret
-      - ./execution/geth_password.txt:/execution/geth_password.txt
-
-  # We run a validator client with 64, deterministically-generated keys that match
-  # The validator keys present in the beacon chain genesis state generated a few steps above.
   validator:
-    image: "gcr.io/prysmaticlabs/prysm/validator:v4.1.1"
+    image: gcr.io/prysmaticlabs/prysm/validator:latest
+    container_name: evire-prysm-validator
+    volumes:
+      - ./prysm-data:/prysm-data
+      - ./config.yml:/config.yml
     command:
+      - --datadir=/prysm-data
       - --beacon-rpc-provider=beacon-chain:4000
-      - --datadir=/consensus/validatordata
       - --accept-terms-of-use
+      - --chain-config-file=/config.yml
       - --interop-num-validators=64
       - --interop-start-index=0
-      - --chain-config-file=/consensus/config.yml
-      - --force-clear-db
     depends_on:
-      beacon-chain:
-        condition: service_started
-    volumes:
-      - ./consensus:/consensus
+      - beacon-chain
+    restart: unless-stopped
+    networks:
+      - evire-network
