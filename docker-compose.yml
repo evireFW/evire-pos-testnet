@@ -1,84 +1,48 @@
-version: '3.8'
-
-networks:
-  evire-network:
-    name: evire-network
+version: "3.9"
 
 services:
   geth:
-    image: ethereum/client-go:latest
-    container_name: evire-geth-node
-    ports:
-      - "30303:30303/tcp"
-      - "30303:30303/udp"
-      - "8545:8545"
+    build:
+      context: .
+      dockerfile: Dockerfile
     volumes:
-      - ./geth-data:/geth-data
-      - ./genesis.json:/genesis.json
-      - ./jwt.hex:/jwt.hex
-    command:
-      - --datadir=/geth-data
-      - --networkid=787878
-      - --http
-      - --http.addr=0.0.0.0
-      - --http.port=8545
-      - --http.api=eth,net,web3,engine
-      - --http.corsdomain=*
-      - --authrpc.addr=0.0.0.0
-      - --authrpc.port=8551
-      - --authrpc.vhosts=*
-      - --authrpc.jwtsecret=/jwt.hex
-      - --syncmode=full
-      - --nat=extip:37.27.118.184
-      - --bootnodes=enode://ecb78178a209f0f41f26dbc79b53630678bc98fe16b9fac1161a76852f8c90836974ee5f4eebfe676caf802a19385aeef2f22f221c13952b8da503bc59df1b71@37.27.118.184:30303
-    restart: unless-stopped
-    networks:
-      - evire-network
+      - ./execution:/root/.ethereum
+      - ./jwtsecret:/root/.ethereum/jwtsecret
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+      - "8551:8551"
+      - "30303:30303"
+      - "30303:30303/udp"
 
   beacon-chain:
-    image: gcr.io/prysmaticlabs/prysm/beacon-chain:latest
-    container_name: evire-prysm-beacon-chain
-    ports:
-      - "4000:4000"
-      - "13000:13000"
-    volumes:
-      - ./prysm-data:/prysm-data
-      - ./jwt.hex:/jwt.hex
-      - ./config.yml:/config.yml
-      - ./genesis.ssz:/genesis.ssz
+    image: "gcr.io/prysmaticlabs/prysm/beacon-chain:latest"
     command:
-      - --datadir=/prysm-data
+      - --datadir=/consensus/beacondata
+      - --execution-endpoint=http://geth:8551
+      - --jwt-secret=/root/.ethereum/jwtsecret
       - --rpc-host=0.0.0.0
       - --grpc-gateway-host=0.0.0.0
       - --monitoring-host=0.0.0.0
-      - --execution-endpoint=http://geth:8551
+      - --p2p-tcp-port=13000
+      - --p2p-udp-port=12000
+      - --p2p-host-ip=0.0.0.0
+      - --chain-id=787878
       - --accept-terms-of-use
-      - --jwt-secret=/jwt.hex
-      - --genesis-state=/genesis.ssz
-      - --chain-config-file=/config.yml
-      - --bootstrap-node=enr:-Ku4QGQJf2bcDAwVGvbvtq3AB4KKwAvStTenY-i_QnW2ABNRRBncIU_5qR_e_um-9t3s9g-Y5ZfFATj1nhtzq6lvgc4Bg2V0aMvKhARa_qKEZrOm64JpZIJ2NIJpcIR_AAABiXNlY3AyNTZrMaED7LeBeKIJ8PQfJtvHm1NjBni8mP4WufrBFhp2hS-MkIOEc25hcMCDdGNwgnZfg3VkcIJ2Xw
-      - --suggested-fee-recipient=0x0000000000000000000000000000000000000000
+      - --grpc-gateway-port=3500
+      - --min-sync-peers=1
+      - --bootstrap-node=enr:-Ke4QIUKE3dltAD5SgDJzWlQ_fCcQbP06GFL-FPufWNKH9syBPaRD6cIkncjFduAn7m0AuEBzKZeJPCwMuD59e5TlEaGAZCXXEiHg2V0aMvKhD4l0bqEZr6CAoJpZIJ2NIJpcIR_AAABiXNlY3AyNTZrMaECHUiUuz_KqJOsd0_mIBJcR71OnZdY-4GvIVix-7QkTA6Ec25hcMCDdGNwgnZfg3VkcIJ2Xw
+    ports:
+      - "3500:3500"
+      - "4000:4000"
+      - "13000:13000"
+      - "12000:12000/udp"
+    volumes:
+      - ./consensus:/consensus
+      - ./jwtsecret:/root/.ethereum/jwtsecret
     depends_on:
       - geth
-    restart: unless-stopped
-    networks:
-      - evire-network
 
-  validator:
-    image: gcr.io/prysmaticlabs/prysm/validator:latest
-    container_name: evire-prysm-validator
-    volumes:
-      - ./prysm-data:/prysm-data
-      - ./config.yml:/config.yml
-    command:
-      - --datadir=/prysm-data
-      - --beacon-rpc-provider=beacon-chain:4000
-      - --accept-terms-of-use
-      - --chain-config-file=/config.yml
-      - --interop-num-validators=64
-      - --interop-start-index=0
-    depends_on:
-      - beacon-chain
-    restart: unless-stopped
-    networks:
-      - evire-network
+volumes:
+  execution:
+  consensus:
